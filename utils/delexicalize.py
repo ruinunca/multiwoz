@@ -1,8 +1,8 @@
 import re
 
-import simplejson as json
+import json
 
-from nlp import normalize
+from .nlp import normalize
 
 digitpat = re.compile('\d+')
 timepat = re.compile("\d{1,2}[:]\d{1,2}")
@@ -28,7 +28,7 @@ def prepareSlotValuesIndependent():
     # read databases
     for domain in domains:
         try:
-            fin = file('db/' + domain + '_db.json')
+            fin = open('db/' + domain + '_db.json', "r")
             db_json = json.load(fin)
             fin.close()
 
@@ -103,7 +103,7 @@ def prepareSlotValuesIndependent():
             dic.append((normalize('Parkside Police Station'), '[' + domain + '_' + 'name' + ']'))
 
     # add at the end places from trains
-    fin = file('db/' + 'train' + '_db.json')
+    fin = open('db/' + 'train' + '_db.json', "r")
     db_json = json.load(fin)
     fin.close()
 
@@ -127,7 +127,7 @@ def prepareSlotValuesIndependent():
 def delexicalise(utt, dictionary):
     for key, val in dictionary:
         utt = (' ' + utt + ' ').replace(' ' + key + ' ', ' ' + val + ' ')
-        utt = utt[1:-1]  # why this?
+        utt = utt[1:-1]  # removes first and last whitespace
 
     return utt
 
@@ -136,12 +136,12 @@ def delexicaliseDomain(utt, dictionary, domain):
     for key, val in dictionary:
         if key == domain or key == 'value':
             utt = (' ' + utt + ' ').replace(' ' + key + ' ', ' ' + val + ' ')
-            utt = utt[1:-1]  # why this?
+            utt = utt[1:-1]  # removes first and last whitespace
 
     # go through rest of domain in case we are missing something out?
     for key, val in dictionary:
         utt = (' ' + utt + ' ').replace(' ' + key + ' ', ' ' + val + ' ')
-        utt = utt[1:-1]  # why this?
+        utt = utt[1:-1] # removes first and last whitespace
     return utt
 
 if __name__ == '__main__':

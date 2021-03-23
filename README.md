@@ -116,7 +116,11 @@ The belief state have three sections: semi, book and booked. Semi refers to slot
 
 
 # Requirements
-Python 2 with pip, pytorch==0.4.1
+Pre-process of Dataset
+- Create_delex_data is compatible with Python 3.6
+
+Model
+- Python 2 with pip, pytorch==0.4.1
 
 # Quick start
 In repo directory:

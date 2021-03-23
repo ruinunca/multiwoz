@@ -2,7 +2,7 @@ import sqlite3
 
 import numpy as np
 
-from nlp import normalize
+from .nlp import normalize
 
 
 # loading databases

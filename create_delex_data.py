@@ -10,6 +10,8 @@ from io import BytesIO
 from zipfile import ZipFile
 from tqdm import tqdm
 
+from joblib import Parallel, delayed
+
 import numpy as np
 
 from utils import dbPointer
@@ -37,7 +39,7 @@ def fixDelex(filename, data, data2, idx, idx_acts):
     except:
         return data
 
-    if not isinstance(turn, str) and not isinstance(turn, unicode):
+    if not isinstance(turn, str):
         for k, act in turn.items():
             if 'Attraction' in k:
                 if 'restaurant_' in data['log'][idx]['text']:
@@ -88,24 +90,24 @@ def addBookingPointer(task, turn, pointer_vector):
     # Booking pointer
     rest_vec = np.array([1, 0])
     if task['goal']['restaurant']:
-        if turn['metadata']['restaurant'].has_key("book"):
-            if turn['metadata']['restaurant']['book'].has_key("booked"):
+        if "book" in turn['metadata']['restaurant']:
+            if "booked" in turn['metadata']['restaurant']['book']:
                 if turn['metadata']['restaurant']['book']["booked"]:
                     if "reference" in turn['metadata']['restaurant']['book']["booked"][0]:
                         rest_vec = np.array([0, 1])
 
     hotel_vec = np.array([1, 0])
     if task['goal']['hotel']:
-        if turn['metadata']['hotel'].has_key("book"):
-            if turn['metadata']['hotel']['book'].has_key("booked"):
+        if "book" in turn['metadata']['hotel']:
+            if "booked" in turn['metadata']['hotel']['book']:
                 if turn['metadata']['hotel']['book']["booked"]:
                     if "reference" in turn['metadata']['hotel']['book']["booked"][0]:
                         hotel_vec = np.array([0, 1])
 
     train_vec = np.array([1, 0])
     if task['goal']['train']:
-        if turn['metadata']['train'].has_key("book"):
-            if turn['metadata']['train']['book'].has_key("booked"):
+        if "book" in turn['metadata']['train']:
+            if "booked" in turn['metadata']['train']['book']:
                 if turn['metadata']['train']['book']["booked"]:
                     if "reference" in turn['metadata']['train']['book']["booked"][0]:
                         train_vec = np.array([0, 1])
@@ -184,7 +186,7 @@ def analyze_dialogue(dialogue, maxlen):
     # do all the necessary postprocessing
     if len(d['log']) % 2 != 0:
         #print path
-        print 'odd # of turns'
+        print('odd # of turns')
         return None  # odd number of turns, wrong dialogue
     d_pp = {}
     d_pp['goal'] = d['goal']  # for now we just copy the goal
@@ -192,22 +194,22 @@ def analyze_dialogue(dialogue, maxlen):
     sys_turns = []
     for i in range(len(d['log'])):
         if len(d['log'][i]['text'].split()) > maxlen:
-            print 'too long'
+            #print('too long')
             return None  # too long sentence, wrong dialogue
         if i % 2 == 0:  # usr turn
             if 'db_pointer' not in d['log'][i]:
-                print 'no db'
+                #print('no db')
                 return None  # no db_pointer, probably 2 usr turns in a row, wrong dialogue
             text = d['log'][i]['text']
             if not is_ascii(text):
-                print 'not ascii'
+                #print('not ascii')
                 return None
             #d['log'][i]['tkn_text'] = self.tokenize_sentence(text, usr=True)
             usr_turns.append(d['log'][i])
         else:  # sys turn
             text = d['log'][i]['text']
             if not is_ascii(text):
-                print 'not ascii'
+                #print('not ascii')
                 return None
             #d['log'][i]['tkn_text'] = self.tokenize_sentence(text, usr=False)
             belief_summary = get_summary_bstate(d['log'][i]['metadata'])
@@ -236,11 +238,11 @@ def get_dial(dialogue):
 
 
 def createDict(word_freqs):
-    words = word_freqs.keys()
-    freqs = word_freqs.values()
+    words = list(word_freqs.keys())
+    freqs = list(word_freqs.values())
 
     sorted_idx = np.argsort(freqs)
-    sorted_words = [words[ii] for ii in sorted_idx[::-1]]
+    sorted_words = list([words[ii] for ii in sorted_idx[::-1]])
 
     # Extra vocabulary symbols
     _GO = '_GO'
@@ -255,9 +257,7 @@ def createDict(word_freqs):
     for ii, ww in enumerate(sorted_words):
         worddict[ww] = ii + len(extra_tokens)
 
-    for key, idx in worddict.items():
-        if idx >= DICT_SIZE:
-            del worddict[key]
+    worddict = { k:v for k, v in worddict.items() if v < DICT_SIZE }
 
     return worddict
 
@@ -275,6 +275,42 @@ def loadData():
             shutil.copy('data/multi-woz/MULTIWOZ2 2/dialogue_acts.json', 'data/multi-woz/')
 
 
+def process_dialogue(dialogue, name, dialogue_acts, slot_values):
+    idx_acts = 1
+
+    for idx, turn in enumerate(dialogue['log']):
+        # normalization, split and delexicalization of the sentence
+        sent = normalize(turn['text'])
+
+        words = sent.split()
+        sent = delexicalize.delexicalise(' '.join(words), slot_values)
+
+        # parsing reference number GIVEN belief state
+        sent = delexicaliseReferenceNumber(sent, turn)
+
+        # changes to numbers only here
+        digitpat = re.compile('\d+')
+        sent = re.sub(digitpat, '[value_count]', sent)
+
+        # delexicalized sentence added to the dialogue
+        dialogue['log'][idx]['text'] = sent
+
+        if idx % 2 == 1:  # if it's a system turn
+            # add database pointer
+            pointer_vector = addDBPointer(turn)
+            # add booking pointer
+            pointer_vector = addBookingPointer(dialogue, turn, pointer_vector)
+
+            #print pointer_vector
+            dialogue['log'][idx - 1]['db_pointer'] = pointer_vector.tolist()
+
+        # FIXING delexicalization:
+        dialogue = fixDelex(name, dialogue, dialogue_acts, idx, idx_acts)
+        idx_acts +=1
+
+    return {name: dialogue}
+
+
 def createDelexData():
     """Main function of the script - loads delexical dictionary,
     goes through each dialogue and does:
@@ -290,15 +326,20 @@ def createDelexData():
     dic = delexicalize.prepareSlotValuesIndependent()
     delex_data = {}
 
-    fin1 = file('data/multi-woz/data.json')
+    fin1 = open('data/multi-woz/data.json', "r")
     data = json.load(fin1)
 
-    fin2 = file('data/multi-woz/dialogue_acts.json')
+    fin2 = open('data/multi-woz/dialogue_acts.json', "r")
     data2 = json.load(fin2)
 
     cnt = 10
 
-    for dialogue_name in tqdm(data):
+    results = Parallel()(delayed(process_dialogue)(data[name], name, data2, dic) for name in tqdm(data))
+    for dialogue_dict in tqdm(results):
+        for dialogue_name, dialogue in dialogue_dict.items():
+            delex_data[dialogue_name] = dialogue
+
+    """for dialogue_name in tqdm(data):
         dialogue = data[dialogue_name]
         #print dialogue_name
 
@@ -334,7 +375,7 @@ def createDelexData():
             dialogue = fixDelex(dialogue_name, dialogue, data2, idx, idx_acts)
             idx_acts +=1
 
-        delex_data[dialogue_name] = dialogue
+        delex_data[dialogue_name] = dialogue"""
 
     with open('data/multi-woz/delex.json', 'w') as outfile:
         json.dump(delex_data, outfile)
@@ -346,13 +387,13 @@ def divideData(data):
     """Given test and validation sets, divide
     the data for three different sets"""
     testListFile = []
-    fin = file('data/multi-woz/testListFile.json')
+    fin = open('data/multi-woz/testListFile.json', "r")
     for line in fin:
         testListFile.append(line[:-1])
     fin.close()
 
     valListFile = []
-    fin = file('data/multi-woz/valListFile.json')
+    fin = open('data/multi-woz/valListFile.json', "r")
     for line in fin:
         valListFile.append(line[:-1])
     fin.close()
@@ -406,13 +447,13 @@ def divideData(data):
                     word_freqs_sys[w] += 1
 
     # save all dialogues
-    with open('data/val_dials.json', 'wb') as f:
+    with open('data/val_dials.json', 'w') as f:
         json.dump(val_dials, f, indent=4)
 
-    with open('data/test_dials.json', 'wb') as f:
+    with open('data/test_dials.json', 'w') as f:
         json.dump(test_dials, f, indent=4)
 
-    with open('data/train_dials.json', 'wb') as f:
+    with open('data/train_dials.json', 'w') as f:
         json.dump(train_dials, f, indent=4)
 
     return word_freqs_usr, word_freqs_sys
@@ -435,19 +476,24 @@ def buildDictionaries(word_freqs_usr, word_freqs_sys):
             dic[v] = k
         idx2words.append(dic)
 
-    with open('data/input_lang.index2word.json', 'wb') as f:
+    with open('data/input_lang.index2word.json', 'w') as f:
         json.dump(idx2words[0], f, indent=2)
-    with open('data/input_lang.word2index.json', 'wb') as f:
+    with open('data/input_lang.word2index.json', 'w') as f:
         json.dump(dicts[0], f,indent=2)
-    with open('data/output_lang.index2word.json', 'wb') as f:
+    with open('data/output_lang.index2word.json', 'w') as f:
         json.dump(idx2words[1], f,indent=2)
-    with open('data/output_lang.word2index.json', 'wb') as f:
+    with open('data/output_lang.word2index.json', 'w') as f:
         json.dump(dicts[1], f,indent=2)
 
 
 def main():
-    print('Create delexicalized dialogues. Get yourself a coffee, this might take a while.')
-    delex_data = createDelexData()
+    if os.path.exists("data/multi-woz/delex.json"):
+        with open("data/multi-woz/delex.json", "r") as file:
+            delex_data = json.load(file)
+    else:
+        print('Create delexicalized dialogues. Get yourself a coffee, this might take a while.')
+        delex_data = createDelexData()
+
     print('Divide dialogues for separate bits - usr, sys, db, bs')
     word_freqs_usr, word_freqs_sys = divideData(delex_data)
     print('Building dictionaries')
